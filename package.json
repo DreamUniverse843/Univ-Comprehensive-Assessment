@@ -1,0 +1,5 @@
+{
+  "name": "univ-comprehensive-assessment",
+  "private": true,
+  "scripts": {"start": "bash start.sh", "test": "bash test.sh"}
+}

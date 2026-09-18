@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="本科生综合测评：附加分计算、临时库审核与历史归档。">
+  <title>综合测评工作台</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><span class="brand-icon">综</span><span>综合测评<span class="brand-sub">ASSESSMENT WORKSPACE</span></span></a>
+    <button class="workspace" id="workspace"><span class="workspace-icon">▤</span><span><strong id="college-label">测评工作区</strong><small id="year-label">2025—2026 学年</small></span><span>⌄</span></button>
+    <div class="nav-label">工作区</div>
+    <nav aria-label="主导航">
+      <a href="#overview" data-page="overview"><span>◫</span>工作概览</a>
+      <a href="#students" data-page="students"><span>▦</span>学生汇总</a>
+      <a href="#records" data-page="records"><span>≡</span>申报明细</a>
+      <a href="#review" data-page="review"><span>☑</span>待审核 <b id="pending-badge">—</b></a>
+      <a href="#duplicates" data-page="duplicates"><span>⧉</span>重复核对 <b id="duplicate-badge">—</b></a>
+      <div class="nav-label">管理</div>
+      <a href="#projects" data-page="projects"><span>▤</span>项目管理</a>
+      <a href="#college" data-page="college"><span>♧</span>本学院名册</a>
+      <a href="#registry" data-page="registry"><span>♧</span>基础信息维护</a>
+      <a href="#archives" data-page="archives"><span>▣</span>历史归档</a>
+      <a href="#rules" data-page="rules"><span>▧</span>计分规则</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="local-dot"></span> 本机工作空间<small>原表保留 · 审核留痕 · 归档锁定</small><button id="settings" class="link-button">工作区设置 ↗</button></div>
+  </aside>
+  <div class="shell">
+    <header class="topbar"><div class="breadcrumb">工作区 <span>/</span> <strong id="breadcrumb">工作概览</strong></div><div class="topbar-right"><span id="stage" class="stage">临时库</span><button class="user-button" id="user-button"><span class="avatar">审</span><span id="actor-label">设置审核人</span></button></div></header>
+    <div id="archive-banner"></div>
+    <main id="main" aria-live="polite"><div class="loading"><span class="spinner"></span>正在读取测评数据…</div></main>
+    <footer>北京语言大学本科生综合素质测评办法 · 校学字〔2022〕28 号<span>本地试用版 1.0</span></footer>
+  </div>
+  <dialog id="dialog"><div id="dialog-content"></div></dialog>
+  <div id="toast" role="status"></div>
+  <input id="file-input" type="file" accept=".xlsx" multiple hidden>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
