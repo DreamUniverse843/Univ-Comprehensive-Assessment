@@ -5,3 +5,5 @@ __pycache__/
 node_modules/
 output/
 .claude/
+dbgmd-00001.sign
+dbgmd-00002.unknown
