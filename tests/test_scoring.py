@@ -104,3 +104,35 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(self.summary([],roster=roster)['net'],0)
 
 if __name__=='__main__':unittest.main()
+
+
+class ParticipationTests(unittest.TestCase):
+    def rows(self,award,category='文体科技实践活动',review='auto'):
+        score=.2 if category=='文体科技实践活动' else .4
+        return [record(i,award=award,category=category,original_score=score,review=review,custom_score=score) for i in range(1,4)]
+    def test_awards_do_not_use_two_participation_slots(self):
+        for category in ['文体科技实践活动','专业学术']:
+            for review in ['auto','original','rule','custom']:
+                with self.subTest(category=category,review=review):
+                    result=calculate(self.rows('参与奖',category,review))
+                    self.assertEqual(sum(r['credited']>0 for r in result['records']),3)
+                    self.assertFalse(any('最高两次' in note for r in result['records'] for note in r['notes']))
+    def test_plain_participation_only_two_and_award_separate(self):
+        for category in ['文体科技实践活动','专业学术']:
+            rows=self.rows('参与',category)
+            rows.append(record(4,award='参与奖',category=category,original_score=rows[0]['original_score']))
+            result=calculate(rows)
+            self.assertEqual(sum(r['credited']>0 for r in result['records'][:3]),2)
+            self.assertGreater(result['records'][3]['credited'],0)
+    def test_same_event_award_and_participation_do_not_stack(self):
+        rows=self.rows('参与');rows[0]['event']='同一比赛'
+        rows.append(record(4,award='参与奖',event='同一比赛',category='文体科技实践活动',original_score=.2))
+        result=calculate(rows)
+        self.assertEqual(sum(r['credited'] for r in result['records'] if r['event']=='同一比赛'),.2)
+        self.assertEqual(result['students'][0]['net'],.6)
+    def test_award_with_performance_description_not_role(self):
+        r=record(award='表演参与奖',category='文体科技实践活动',original_score=.2)
+        self.assertEqual(infer(r)[4],'')
+    def test_manual_plain_and_award_eligibility(self):
+        self.assertNotIn('参与奖需确认赛制与入围条件',infer(record(award='参与',source='手工录入'))[-1])
+        self.assertIn('参与奖需确认赛制与入围条件',infer(record(award='参与奖',source='手工录入'))[-1])

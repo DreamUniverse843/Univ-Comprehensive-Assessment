@@ -13,11 +13,15 @@ def catalog(app):
     app.initialize(path)
     c=app.connect(path)
     c.execute('CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,created TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0)')
+
+    if 'deleted_at' not in {r[1] for r in c.execute('PRAGMA table_info(projects)')}:
+        c.execute('ALTER TABLE projects ADD COLUMN deleted_at TEXT')
+
     c.execute('BEGIN IMMEDIATE')
     if not c.execute("SELECT 1 FROM projects WHERE id='legacy'").fetchone():
         with app.connect(app.DB) as old:
             meta=dict(old.execute('SELECT key,value FROM meta'))
-            c.execute('INSERT INTO projects VALUES(?,?,?,0)',('legacy',meta.get('year','')+' '+meta.get('college','')+'测评',app.now()))
+            c.execute('INSERT INTO projects VALUES(?,?,?,0,NULL)',('legacy',meta.get('year','')+' '+meta.get('college','')+'测评',app.now()))
             for table in ['departments','classes','roster']:
                 rows=[dict(r) for r in old.execute('SELECT * FROM '+table)]
                 for row in rows:
@@ -36,6 +40,8 @@ def resolve(app,ident):
     if not row:raise ValueError('项目不存在或已删除，请到项目管理切换或恢复')
     path=path_for(app,ident)
     if not path.exists():raise ValueError('项目数据文件缺失')
+    with app.connect(path) as c:
+        if 'deleted' not in {r[1] for r in c.execute('PRAGMA table_info(roster)')}:app.registry.initialize(c)
     return path
 
 def listing(app):
@@ -58,9 +64,9 @@ def copy_roster(app,src,dst,college,actor):
         dst.execute('INSERT OR IGNORE INTO departments(name,code) VALUES(?,?)',(dep['name'],dep['code']))
         target=dst.execute('SELECT id,active FROM departments WHERE name=?',(dep['name'],)).fetchone()
         if not target or not target['active']:continue
-        dst.execute('INSERT OR IGNORE INTO classes(department_id,name) VALUES(?,?)',(target['id'],cls['name']))
-        target_class=dst.execute('SELECT id,active FROM classes WHERE department_id=? AND name=?',(target['id'],cls['name'])).fetchone()
-        if not target_class['active']:continue
+        dst.execute('INSERT OR IGNORE INTO classes(department_id,name,aliases) VALUES(?,?,?)',(target['id'],cls['name'],cls.get('aliases')))
+        target_class=dst.execute('SELECT id,active,deleted FROM classes WHERE department_id=? AND name=?',(target['id'],cls['name'])).fetchone()
+        if not target_class['active'] or target_class['deleted']:continue
         for student in [s for s in master['students'] if s['class_id']==cls['id'] and s['active']]:
             old=dst.execute('SELECT * FROM roster WHERE student_id=?',(student['student_id'],)).fetchone()
             if old:
@@ -84,7 +90,7 @@ def create(app,body,actor):
             c.execute("UPDATE meta SET value=? WHERE key='year'",(year,));c.execute("UPDATE meta SET value=? WHERE key='college'",(college,))
             if body.get('use_roster',True):copy_roster(app,master,c,college,actor)
             app.log(c,actor,'创建测评项目',ident,after={'name':name,'year':year,'college':college})
-        master.execute('INSERT INTO projects VALUES(?,?,?,0)',(ident,name,app.now()))
+        master.execute('INSERT INTO projects VALUES(?,?,?,0,NULL)',(ident,name,app.now()))
     return {'id':ident}
 
 def export(app,ident):
@@ -113,6 +119,9 @@ def import_project(app,body,actor):
             columns=[r[1] for r in c.execute('PRAGMA table_info('+table+')')]
             if table=='meta':c.execute('DELETE FROM meta')
             for row in tables[table]:
+                if isinstance(row,dict):
+                    row=dict(row)
+                    for key,value in ({'deleted':0,'aliases':None} if table=='classes' else {'deleted':0} if table=='roster' else {}).items():row.setdefault(key,value)
                 if not isinstance(row,dict) or set(row)!=set(columns):raise ValueError('项目表字段不完整：'+table)
                 c.execute('INSERT INTO '+table+' ('+','.join(columns)+') VALUES ('+','.join('?' for _ in columns)+')',tuple(row[k] for k in columns))
         meta=dict(c.execute('SELECT key,value FROM meta'))
@@ -123,7 +132,7 @@ def import_project(app,body,actor):
         if meta['locked']=='true' and not tables['archives']:raise ValueError('归档快照缺失')
         app.state(c) # Validate the imported project with the same reader before publishing it.
         app.log(c,actor,'导入项目副本',ident,after={'name':name,'source_digest':payload['digest']})
-    with catalog(app) as master:master.execute('INSERT INTO projects VALUES(?,?,?,0)',(ident,name,app.now()))
+    with catalog(app) as master:master.execute('INSERT INTO projects VALUES(?,?,?,0,NULL)',(ident,name,app.now()))
     return {'id':ident}
 
 def manage(app,body,actor):
@@ -135,7 +144,26 @@ def manage(app,body,actor):
             name=str(body.get('name','')).strip()
             if not name or len(name)>100:raise ValueError('项目名称须为 1～100 字')
             c.execute('UPDATE projects SET name=? WHERE id=?',(name,ident))
-        elif action in ['delete','restore']:c.execute('UPDATE projects SET deleted=? WHERE id=?',(int(action=='delete'),ident))
+        elif action in ['delete','restore']:
+            c.execute('UPDATE projects SET deleted=?,deleted_at=? WHERE id=?',(int(action=='delete'),app.now() if action=='delete' else None,ident))
+        elif action=='purge':
+            if not row['deleted']:raise ValueError('只能永久删除已在回收站的项目')
+            if ident=='legacy':raise ValueError('不能删除默认项目')
+            if body.get('confirm')!=row['name']:raise ValueError('请准确输入项目名称以确认永久删除')
+            db_path=path_for(app,ident)
+            if db_path.exists():
+                db=app.connect(db_path)
+                try:
+                    if db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]:raise ValueError('项目仍在使用，请稍后重试')
+                finally:db.close()
+            # 文件删除失败时保留回收站条目，便于重试。
+            for suffix in ['-wal','-shm','']:
+                target=Path(str(db_path)+suffix)
+                if target.exists():target.unlink()
+            c.execute('DELETE FROM projects WHERE id=?',(ident,))
+            app.log(c,actor,'项目永久删除',ident,dict(row),{})
+            c.commit()
+            return {'ok':True,'purged':True}
         else:raise ValueError('项目操作无效')
         app.log(c,actor,'项目'+action,ident,dict(row),body)
     return {'ok':True}

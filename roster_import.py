@@ -51,11 +51,14 @@ def preview(c,body,source_rows=None):
             if not f['name'].lower().endswith('.xlsx'):raise ValueError('当前支持 .xlsx 工作簿')
             found,notes=read_workbook(base64.b64decode(f['data'],validate=True),f['name']);rows+=found;warnings+=notes
     master=registry.get(c);bycode={d['code']:d for d in master['departments'] if d['code']};byname={d['name']:d for d in master['departments']};existing={s['student_id']:s for s in master['students']}
+    recycled={r['student_id'] for r in c.execute('SELECT student_id FROM roster WHERE deleted=1')}
+    recycled_classes={(r['college'],r['name']) for r in registry.get_recycle(c)['classes']}
     groups={}
     for row in rows:
         r={k:text(row.get(k,'')) for k in ['student_id','name','college','class_name','source','sheet','row','code']}
         dep=bycode.get(r['code'] or r['college'])
         if dep:r['college']=dep['name']
+        r['class_name']=registry.canonical_class(c,r['college'],r['class_name'])
         scope=body.get('college_filter')
         if scope and scope not in ['*','全部学院'] and r['college'] and r['college']!=scope:continue
         groups.setdefault(r['student_id'] or 'missing:'+str(len(groups)),[]).append(r)
@@ -65,6 +68,7 @@ def preview(c,body,source_rows=None):
         variants=list(dict.fromkeys((x['name'],x['college'],x['class_name']) for x in group));item['variants']=[dict(zip(['name','college','class_name'],x)) for x in variants]
         if not re.fullmatch(r'\d{10,12}',r['student_id']) or any(not x[k] for x in group for k in ['name','college','class_name']):item.update(status='invalid',reason='学号须为 10～12 位数字，且姓名、院系、班级完整')
         elif len(variants)>1:item.update(status='conflict',reason='同一学号的姓名、院系或班级不一致，请先核对')
+        elif r['student_id'] in recycled or (r['college'],r['class_name']) in recycled_classes:item.update(status='conflict',reason='学生或班级在回收站，请先恢复或核对')
         elif r['student_id'] in existing:
             old=existing[r['student_id']];same=all(old[k]==r[k] for k in ['name','college','class_name'])
             item.update(status='existing' if same else 'conflict',reason='名册已存在，跳过（不改变停用状态）' if same else '与已有名册不一致，不覆盖',existing=old)

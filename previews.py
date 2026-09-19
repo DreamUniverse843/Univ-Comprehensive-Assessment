@@ -41,7 +41,7 @@ def calculate_draft(c,body):
         bases[body.get('key','')]=vals
     else:raise ValueError('试算类型无效')
     college=c.execute("SELECT value FROM meta WHERE key='college'").fetchone()[0]
-    result=calculate(records,bases,college,registry.get(c)['students'])
+    result=calculate(registry.normalize_records(c,records),bases,college,registry.get(c)['students'])
     r=next((r for r in result['records'] if r['id']==ident),None) if draft else None
     key=r['student_key'] if r else body.get('key')
     student=next((s for s in result['students'] if s['key']==key),None)

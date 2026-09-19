@@ -10,8 +10,8 @@ ACADEMIC = [[4,3.5,3,2,1],[3,2.5,2,1,.8],[2.5,2,1.5,.8,.6],[2,1.5,1,.6,.4],[1,.7
 CULTURE = [[2,1.5,1.2,.8,.5],[1.6,1.2,.8,.6,.4],[1.2,.9,.6,.4,.3],[.8,.6,.4,.3,.2],[.5,.4,.3,.2,.1]]
 CAPS = {'专业学术':4,'文体科技实践活动':3,'志愿服务':2,'荣誉表彰':3,'学生干部':2,'非专业作品':1,'无偿献血':.4,'处罚分':10}
 RULES = [
- {'title':'专业学术竞赛','category':'专业学术','cap':'4 分','page':7,'text':'按级别和奖项计算。相同项目跨级别、同一比赛不同奖项取最高分。集体项目按 1/2 计分。','table':ACADEMIC},
- {'title':'文体科技实践活动','category':'文体科技实践活动','cap':'3 分','page':8,'text':'同一赛事取最高分。裁判、表演（含主持）、体育队活动经理各限 2 次。主持统一按文体参与分计算。集体项目按 1/2 计分。','table':CULTURE},
+ {'title':'专业学术竞赛','category':'专业学术','cap':'4 分','page':7,'text':'按级别和奖项计算。相同项目跨级别、同一比赛不同奖项取最高分。普通参与每年只计最高两次，参与奖属于获奖，不占普通参与次数。集体项目按 1/2 计分。','table':ACADEMIC},
+ {'title':'文体科技实践活动','category':'文体科技实践活动','cap':'3 分','page':8,'text':'同一赛事取最高分。普通参与每年只计最高两次，参与奖属于获奖，不占普通参与次数。裁判、表演（含主持）、体育队活动经理各限 2 次。主持统一按文体参与分计算。集体项目按 1/2 计分。','table':CULTURE},
  {'title':'志愿服务','category':'志愿服务','cap':'200 小时 / 2 分','page':12,'text':'已认定时长 × 0.01。年度汇总与活动明细可能重叠时须核实。单项志愿活动内的志愿者荣誉不另加分。'},
  {'title':'学生干部','category':'学生干部','cap':'最高职务，至多 2 分','page':11,'text':'多职务不累加；标准是上限，采用组织测评后的分值。任职不足半年、获得工作学分或勤工助学补助者不计。组织限定的校级及以上个人荣誉不另加分。'},
  {'title':'荣誉表彰','category':'荣誉表彰','cap':'3 分','page':10,'text':'个人荣誉依类型、级别计分；集体荣誉按对应分值的 1/2 计分。军训标兵、军训优秀副班长为 0.2 分。'},
@@ -43,6 +43,13 @@ def award(v):
         if any(w in v for w in words): return i
     return None
 
+def participation_award(value):
+    return any(word in clean(value) for word in ['参与奖','参加奖'])
+
+def ordinary_participation(r):
+    a=clean(r.get('award'))
+    return r['category'] in ['专业学术','文体科技实践活动'] and award(a)==4 and not participation_award(a) and not any(x in a for x in ['主持','表演','演员','参演','裁判','活动经理'])
+
 def infer(r):
     cat=r['category']; a=clean(r.get('award')); lv=level(r.get('level')); group=clean(r.get('kind'))
     score=r.get('original_score'); issues=[]; role=''; page=13; formula='需按审批依据确认'
@@ -51,7 +58,7 @@ def infer(r):
         return 0,cat,'不符合任职或活动计分条件',12,role,[]
     if cat in ['专业学术','文体科技实践活动']:
         page=7 if cat=='专业学术' else 8
-        if any(x in a for x in ['主持','表演','演员','参演','裁判','活动经理']):
+        if not participation_award(a) and any(x in a for x in ['主持','表演','演员','参演','裁判','活动经理']):
             cat='文体科技实践活动'; page=9
             role='裁判' if '裁判' in a else '活动经理' if '活动经理' in a else '表演（含主持）'
             ix=4
@@ -59,10 +66,11 @@ def infer(r):
         if ix is None or lv is None:
             return None,cat,'奖项或级别无法直接匹配；名次需确认前六/前八名赛制',page,role,['奖项或级别需确认']
         if group not in ['个人','集体']: issues.append('缺少个人/集体信息')
-        if '参与' in a and not role and r.get('source')=='手工录入' and not r.get('participation_confirmed'):
+        if participation_award(a) and not role and r.get('source')=='手工录入' and not r.get('participation_confirmed'):
             issues.append('参与奖需确认赛制与入围条件')
         base=(ACADEMIC if cat=='专业学术' else CULTURE)[lv][ix]
         val=rounded(dec(base)*dec(factor)); formula=f'{LEVELS[lv]}标准 {base} × '+('集体系数 1/2' if factor==.5 else '个人系数 1')
+        if ix==4 and not role:formula+=('；参与奖按获奖计，不占普通参与次数' if participation_award(a) else '；普通参与分，本类年度只计最高两次')
     elif cat=='志愿服务':
         page=12
         match=re.fullmatch(r'(\d+(?:\.\d+)?)\s*(?:h|H|小时|时)?',str(r.get('award','')).strip())
@@ -208,12 +216,13 @@ def calculate(records, bases=None, college='文学院', roster=None):
             groups[bucket].append(r)
         winners=[]
         for group in groups.values():
-            ranked=sorted(group,key=lambda r:(-r['value'],str(r['id'])))
+            ranked=sorted(group,key=lambda r:(-r['value'],ordinary_participation(r),str(r['id'])))
             winners.append(ranked[0])
             for r in ranked[1:]: r['notes'].append('同一比赛/同假期/多职务取最高，本条不叠加')
         roles=defaultdict(list); eligible=[]
         for r in winners:
             if r['role'] in ['裁判','表演（含主持）','活动经理','献血']: roles[r['role']].append(r)
+            elif ordinary_participation(r):roles[(r['effective_category'],'普通参与')].append(r)
             else: eligible.append(r)
         for group in roles.values():
             ranked=sorted(group,key=lambda r:(-r['value'],str(r['id'])))

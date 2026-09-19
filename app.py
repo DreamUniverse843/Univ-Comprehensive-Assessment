@@ -91,7 +91,7 @@ def state(c):
             return frozen
     college=c.execute("SELECT value FROM meta WHERE key='college'").fetchone()[0]
     master=registry.get(c)
-    data=calculate([json.loads(r['current']) for r in c.execute('SELECT current FROM records ORDER BY id')],{r['student_key']:json.loads(r['data']) for r in c.execute('SELECT * FROM bases')},college,master['students'])
+    data=calculate(registry.normalize_records(c,[json.loads(r['current']) for r in c.execute('SELECT current FROM records ORDER BY id')]),{r['student_key']:json.loads(r['data']) for r in c.execute('SELECT * FROM bases')},college,master['students'])
     data['registry']=master
     candidates,conflicts=registry.candidates(c)
     data['registry_candidates']={'count':len(candidates),'conflicts':len(conflicts)}
@@ -132,7 +132,7 @@ def mutate(path,body,c):
         for r in raw:
             if r['id'] in others: r.update(review='exclude',review_note=note)
         college=current['college'];master=current['registry']['students']
-        proposed=calculate(raw,{},college,master)
+        proposed=calculate(registry.normalize_records(c,raw),{},college,master)
         selected=next(r for r in proposed['records'] if r['id']==keep_id)
         if selected['status']!='confirmed': raise ValueError('所采纳记录仍有身份、分值或范围问题，请先处理后再作废其他项')
         changed=0
@@ -144,6 +144,12 @@ def mutate(path,body,c):
         return {'ok':True,'voided':changed}
     if path=='/api/registry-batch':
         return registry.batch(c,body,log,actor)
+    if path=='/api/registry-recycle':
+        return registry.get_recycle(c)
+    if path=='/api/registry-restore':
+        return registry.restore(c,body,log,actor)
+    if path=='/api/registry-purge':
+        return registry.purge(c,body,log,actor)
     if path=='/api/use-college-roster':
         with projects.catalog(sys.modules[__name__]) as master:
             return projects.copy_roster(sys.modules[__name__],master,c,c.execute("SELECT value FROM meta WHERE key='college'").fetchone()[0],actor)
@@ -266,11 +272,13 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/college-registry':
                 with projects.catalog(app) as c:return self.send(registry.get(c))
             ident=parse_qs(url.query).get('project',[self.headers.get('X-Project-Id','legacy')])[0]
+            if path=='/api/college-registry-recycle':
+                with projects.catalog(app) as c:return self.send(registry.get_recycle(c))
             if path.startswith('/api/'):
                 REQUEST_DB.set(projects.resolve(app,ident))
             if path=='/api/project-export':return self.send(projects.export(app,ident),filename='测评项目-'+ident+'.json')
-            if path=='/api/college-registry':
-                with projects.catalog(app) as c:return self.send(registry.get(c))
+            if path=='/api/registry-recycle':
+                with connect() as c:return self.send(registry.get_recycle(c))
             if path=='/api/state':
                 with connect() as c: data=state(c)
                 data['token']=TOKEN
@@ -354,6 +362,8 @@ class Handler(BaseHTTPRequestHandler):
                         if body.get('kind')=='department':raise ValueError('院系所为固定字典，请修改 departments.json；页面不提供维护')
                         ident,before,after=registry.save(c,body);log(c,actor,'学院名册维护',ident,before,after);result={'ok':True}
                     elif route=='/api/college-registry-batch':result=registry.batch(c,body,log,actor)
+                    elif route=='/api/college-registry-restore':result=registry.restore(c,body,log,actor)
+                    elif route=='/api/college-registry-purge':result=registry.purge(c,body,log,actor)
                     elif route=='/api/college-roster-import':result=roster_import.commit(c,body,log,actor,source_rows)
                     else:raise ValueError('未知学院名册操作')
                 return self.send(result)
@@ -389,6 +399,14 @@ def main():
                 if p.name.startswith('~$'): continue
                 try: import_files(c,[(p.name,p.read_bytes())],'首次载入')
                 except ValueError as e: print(f'自动载入跳过 {p.name}：{e}。请通过网页导入并指定类别。',flush=True)
+    # 启动时自动清理超期项目
+    try:
+        import project_cleanup
+        cleaned = project_cleanup.cleanup_old_projects(sys.modules[__name__], days=30)
+        if cleaned > 0:
+            print(f'已自动清理 {cleaned} 个超过 30 天的回收站项目', flush=True)
+    except Exception as e:
+        print(f'自动清理失败（不影响启动）：{e}', flush=True)
     server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
     print(f'综合测评工作台：http://127.0.0.1:{args.port}',flush=True)
     try: server.serve_forever()
